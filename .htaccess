@@ -1,0 +1,15 @@
+# GoShashi - Hostinger LiteSpeed / Apache Configuration
+DirectoryIndex disabled
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow static files if present
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Reverse proxy to Node.js application running on standard internal port
+  RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
+</IfModule>
