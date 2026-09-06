@@ -1,0 +1,946 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// 1. IDENTITY & RBAC
+// -------------------------------------------------------------
+
+enum RoleType {
+  CUSTOMER
+  PARTNER
+  ADMIN
+  SUPER_ADMIN
+  OPERATIONS
+  FINANCE
+  SUPPORT
+  CONTENT_MANAGER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+  PENDING_VERIFICATION
+}
+
+model User {
+  id               String       @id @default(uuid())
+  email            String       @unique
+  mobile           String       @unique
+  passwordHash     String
+  name             String
+  status           UserStatus   @default(ACTIVE)
+  isMobileVerified Boolean      @default(false)
+  isEmailVerified  Boolean      @default(false)
+  refreshToken     String?      @db.Text
+  lastLoginAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  userRoles        UserRole[]
+  customer         Customer?
+  partner          Partner?
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+  preferences      NotificationPreference?
+  sentMessages     Message[]    @relation("UserSentMessages")
+  supportTickets   SupportTicket[]
+
+  @@index([email])
+  @@index([mobile])
+  @@index([status])
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        RoleType   @unique
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  userRoles   UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  action      String           // e.g. "services:create", "orders:cancel"
+  description String?
+  createdAt   DateTime         @default(now())
+
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model Customer {
+  id           String        @id @default(uuid())
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  referralCode String?       @unique
+  referredBy   String?
+  avatarUrl    String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  addresses    Address[]
+  cart         Cart?
+  orders       Order[]
+  reviews      Review[]
+  couponUsages CouponUsage[]
+
+  @@index([userId])
+}
+
+enum KycStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+  SUSPENDED
+}
+
+model Partner {
+  id                 String               @id @default(uuid())
+  userId             String               @unique
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName       String?
+  businessType       String               @default("INDIVIDUAL") // INDIVIDUAL, AGENCY
+  experienceYears    Int                  @default(1)
+  photoUrl           String?
+  serviceRadiusKm    Float                @default(10.0)
+  city               String               @default("Gurugram")
+  state              String               @default("Haryana")
+  pincode            String?
+  latitude           Float?
+  longitude          Float?
+  kycStatus          KycStatus            @default(PENDING)
+  kycRejectionReason String?              @db.Text
+  rating             Float                @default(5.0)
+  reviewCount        Int                  @default(0)
+  completedJobsCount Int                  @default(0)
+  isAvailable        Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  documents          PartnerDocument[]
+  services           PartnerService[]
+  serviceAreas       PartnerServiceArea[]
+  availabilities     PartnerAvailability[]
+  assignedOrders     Order[]              @relation("PartnerAssignedOrders")
+  payouts            Payout[]
+  reviews            Review[]             @relation("PartnerReviews")
+  commissionRules    CommissionRule[]
+
+  @@index([userId])
+  @@index([kycStatus])
+  @@index([city])
+  @@index([rating])
+}
+
+model PartnerDocument {
+  id           String    @id @default(uuid())
+  partnerId    String
+  partner      Partner   @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  documentType String    // PAN, AADHAAR, DRIVING_LICENSE, BANK_PASSBOOK
+  documentNo   String
+  fileUrl      String
+  status       KycStatus @default(PENDING)
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([partnerId])
+}
+
+model PartnerService {
+  partnerId String
+  serviceId String
+  partner   Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([partnerId, serviceId])
+  @@index([partnerId])
+  @@index([serviceId])
+}
+
+model PartnerServiceArea {
+  id        String   @id @default(uuid())
+  partnerId String
+  partner   Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  pincode   String
+  areaName  String
+  createdAt DateTime @default(now())
+
+  @@index([partnerId])
+  @@index([pincode])
+}
+
+model PartnerAvailability {
+  id        String   @id @default(uuid())
+  partnerId String
+  partner   Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  dayOfWeek Int      // 0 = Sunday, 1 = Monday, ...
+  startTime String   // e.g. "09:00"
+  endTime   String   // e.g. "19:00"
+  isActive  Boolean  @default(true)
+
+  @@index([partnerId])
+}
+
+// -------------------------------------------------------------
+// 2. MULTI-CITY & CATALOG
+// -------------------------------------------------------------
+
+model City {
+  id        String            @id @default(uuid())
+  name      String            @unique
+  slug      String            @unique
+  state     String
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  pricingRules CityPricingRule[]
+}
+
+model Category {
+  id             String        @id @default(uuid())
+  name           String
+  slug           String        @unique
+  description    String?       @db.Text
+  image          String?
+  icon           String?
+  status         Boolean       @default(true)
+  sortOrder      Int           @default(0)
+  seoTitle       String?
+  seoDescription String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  subcategories  Subcategory[]
+  services       Service[]
+  coupons        Coupon[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+model Subcategory {
+  id          String    @id @default(uuid())
+  categoryId  String
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String    @unique
+  description String?   @db.Text
+  image       String?
+  status      Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  services    Service[]
+
+  @@index([categoryId])
+  @@index([slug])
+}
+
+enum ProductType {
+  SERVICE
+  LEAD_GENERATION
+  PRODUCT
+}
+
+model Service {
+  id               String               @id @default(uuid())
+  categoryId       String
+  subcategoryId    String?
+  productType      ProductType          @default(SERVICE)
+  name             String
+  slug             String               @unique
+  shortDescription String?              @db.Text
+  description      String               @db.Text
+  basePrice        Float
+  salePrice        Float?
+  taxRate          Float                @default(18.0)
+  durationMinutes  Int                  @default(60)
+  warrantyDays     Int                  @default(30)
+  status           Boolean              @default(true)
+  featured         Boolean              @default(false)
+  rating           Float                @default(5.0)
+  reviewCount      Int                  @default(0)
+  seoTitle         String?
+  seoDescription   String?              @db.Text
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  category         Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategory      Subcategory?         @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+  images           ServiceImage[]
+  faqs             ServiceFAQ[]
+  includedItems    ServiceIncludedItem[]
+  excludedItems    ServiceExcludedItem[]
+  addons           ServiceAddon[]
+  pricingRules     CityPricingRule[]
+  partnerServices  PartnerService[]
+  cartItems        CartItem[]
+  orderItems       OrderItem[]
+  reviews          Review[]
+  coupons          Coupon[]
+
+  @@index([categoryId])
+  @@index([slug])
+  @@index([featured])
+  @@index([status])
+}
+
+model ServiceImage {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  url       String
+  altText   String?
+  isPrimary Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([serviceId])
+}
+
+model ServiceFAQ {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  question  String
+  answer    String   @db.Text
+  sortOrder Int      @default(0)
+
+  @@index([serviceId])
+}
+
+model ServiceIncludedItem {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  item      String
+
+  @@index([serviceId])
+}
+
+model ServiceExcludedItem {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  item      String
+
+  @@index([serviceId])
+}
+
+model ServiceAddon {
+  id          String   @id @default(uuid())
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       Float
+  status      Boolean  @default(true)
+
+  cartAddons  CartItemAddon[]
+  orderAddons OrderItemAddon[]
+
+  @@index([serviceId])
+}
+
+model CityPricingRule {
+  id         String   @id @default(uuid())
+  cityId     String
+  serviceId  String
+  city       City     @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  service    Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  basePrice  Float
+  salePrice  Float?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([cityId, serviceId])
+}
+
+// -------------------------------------------------------------
+// 3. ADDRESSES & CART
+// -------------------------------------------------------------
+
+enum AddressType {
+  HOME
+  OFFICE
+  OTHER
+}
+
+model Address {
+  id          String      @id @default(uuid())
+  customerId  String
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name        String
+  mobile      String
+  house       String
+  street      String
+  area        String
+  landmark    String?
+  city        String
+  state       String
+  pincode     String
+  latitude    Float?
+  longitude   Float?
+  addressType AddressType @default(HOME)
+  isDefault   Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  orders      Order[]
+
+  @@index([customerId])
+  @@index([city])
+  @@index([pincode])
+}
+
+model Cart {
+  id         String     @id @default(uuid())
+  customerId String     @unique
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  items      CartItem[]
+}
+
+model CartItem {
+  id            String          @id @default(uuid())
+  cartId        String
+  serviceId     String
+  quantity      Int             @default(1)
+  scheduledDate DateTime?
+  scheduledTime String?
+  addressId     String?
+  notes         String?         @db.Text
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  cart          Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  service       Service         @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  addons        CartItemAddon[]
+
+  @@index([cartId])
+  @@index([serviceId])
+}
+
+model CartItemAddon {
+  id         String       @id @default(uuid())
+  cartItemId String
+  addonId    String
+  cartItem   CartItem     @relation(fields: [cartItemId], references: [id], onDelete: Cascade)
+  addon      ServiceAddon @relation(fields: [addonId], references: [id], onDelete: Cascade)
+
+  @@unique([cartItemId, addonId])
+}
+
+// -------------------------------------------------------------
+// 4. ORDERS & BOOKING LIFECYCLE
+// -------------------------------------------------------------
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  SEARCHING_PARTNER
+  ASSIGNED
+  ACCEPTED
+  ON_THE_WAY
+  ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REFUND_PENDING
+  REFUNDED
+  DISPUTED
+}
+
+model Order {
+  id                String               @id @default(uuid())
+  orderNumber       String               @unique // e.g. "GS-2026-0001"
+  customerId        String
+  customer          Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  partnerId         String?
+  partner           Partner?             @relation("PartnerAssignedOrders", fields: [partnerId], references: [id], onDelete: SetNull)
+  addressId         String
+  address           Address              @relation(fields: [addressId], references: [id], onDelete: Restrict)
+
+  status            OrderStatus          @default(PENDING_PAYMENT)
+  scheduledDate     DateTime
+  scheduledTime     String               // e.g. "09:00 AM - 11:00 AM"
+
+  subtotal          Float
+  addonsTotal       Float                @default(0.0)
+  discountTotal     Float                @default(0.0)
+  taxTotal          Float                @default(0.0)
+  platformFee       Float                @default(49.0)
+  cancellationFee   Float                @default(0.0)
+  finalTotal        Float
+
+  notes             String?              @db.Text
+  completionNotes   String?              @db.Text
+  beforePhotos      String?              @db.Text // JSON array of image URLs
+  afterPhotos       String?              @db.Text // JSON array of image URLs
+
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  items             OrderItem[]
+  statusHistory     OrderStatusHistory[]
+  payment           Payment?
+  review            Review?
+  invoice           Invoice?
+  conversations     Conversation[]
+
+  @@index([customerId])
+  @@index([partnerId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@index([orderNumber])
+}
+
+model OrderItem {
+  id              String           @id @default(uuid())
+  orderId         String
+  serviceId       String
+  order           Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  service         Service          @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  serviceName     String
+  basePrice       Float
+  salePrice       Float?
+  quantity        Int              @default(1)
+  taxRate         Float            @default(18.0)
+  totalPrice      Float
+
+  addons          OrderItemAddon[]
+
+  @@index([orderId])
+  @@index([serviceId])
+}
+
+model OrderItemAddon {
+  id          String       @id @default(uuid())
+  orderItemId String
+  addonId     String
+  orderItem   OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  addon       ServiceAddon @relation(fields: [addonId], references: [id], onDelete: Restrict)
+  name        String
+  price       Float
+
+  @@index([orderItemId])
+}
+
+model OrderStatusHistory {
+  id        String       @id @default(uuid())
+  orderId   String
+  order     Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  oldStatus OrderStatus?
+  newStatus OrderStatus
+  changedBy String       // User ID or SYSTEM
+  reason    String?      @db.Text
+  timestamp DateTime     @default(now())
+
+  @@index([orderId])
+}
+
+// -------------------------------------------------------------
+// 5. PAYMENTS, REFUNDS, INVOICES & COMMISSIONS
+// -------------------------------------------------------------
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id               String               @id @default(uuid())
+  orderId          String               @unique
+  order            Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  provider         String               @default("RAZORPAY") // RAZORPAY, STRIPE, CASH
+  amount           Float
+  currency         String               @default("INR")
+  status           PaymentStatus        @default(PENDING)
+  gatewayOrderId   String?              // e.g. Razorpay order id
+  gatewayPaymentId String?              // e.g. Razorpay payment id
+  gatewaySignature String?
+  metadata         String?              @db.Text // Raw JSON
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  transactions     PaymentTransaction[]
+  refunds          Refund[]
+
+  @@index([gatewayOrderId])
+  @@index([gatewayPaymentId])
+  @@index([status])
+}
+
+model PaymentTransaction {
+  id        String   @id @default(uuid())
+  paymentId String
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  eventType String   // "payment.captured", "payment.failed", etc.
+  rawPayload String  @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([paymentId])
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Refund {
+  id              String       @id @default(uuid())
+  paymentId       String
+  payment         Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  amount          Float
+  reason          String?      @db.Text
+  gatewayRefundId String?
+  status          RefundStatus @default(REQUESTED)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+}
+
+enum CommissionType {
+  GLOBAL
+  CATEGORY
+  SERVICE
+  PARTNER
+  CITY
+}
+
+model CommissionRule {
+  id             String         @id @default(uuid())
+  commissionType CommissionType @default(GLOBAL)
+  partnerId      String?
+  partner        Partner?       @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  percentage     Float          @default(15.0)
+  fixedAmount    Float          @default(0.0)
+  effectiveFrom  DateTime       @default(now())
+  effectiveTo    DateTime?
+  status         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([commissionType])
+  @@index([partnerId])
+}
+
+model Payout {
+  id            String   @id @default(uuid())
+  partnerId     String
+  partner       Partner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  amount        Float
+  currency      String   @default("INR")
+  status        String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  referenceCode String?
+  processedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([partnerId])
+  @@index([status])
+}
+
+model Invoice {
+  id            String   @id @default(uuid())
+  orderId       String   @unique
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  invoiceNumber String   @unique // e.g. "INV-2026-0001"
+  pdfUrl        String?
+  issuedAt      DateTime @default(now())
+  totalAmount   Float
+  taxAmount     Float
+
+  @@index([invoiceNumber])
+}
+
+// -------------------------------------------------------------
+// 6. PROMOTIONS, REVIEWS, NOTIFICATIONS & SUPPORT
+// -------------------------------------------------------------
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+}
+
+model Coupon {
+  id              String       @id @default(uuid())
+  code            String       @unique
+  type            CouponType   @default(PERCENTAGE)
+  value           Float
+  minimumOrder    Float        @default(0.0)
+  maximumDiscount Float?
+  usageLimit      Int?
+  perUserLimit    Int          @default(1)
+  startDate       DateTime
+  endDate         DateTime
+  categoryId      String?
+  category        Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  serviceId       String?
+  service         Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  city            String?
+  status          Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  usages          CouponUsage[]
+
+  @@index([code])
+  @@index([status])
+}
+
+model CouponUsage {
+  id         String   @id @default(uuid())
+  couponId   String
+  customerId String
+  coupon     Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  usedAt     DateTime @default(now())
+
+  @@index([couponId])
+  @@index([customerId])
+}
+
+model Review {
+  id            String        @id @default(uuid())
+  orderId       String        @unique
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       Service       @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  partnerId     String?
+  partner       Partner?      @relation("PartnerReviews", fields: [partnerId], references: [id], onDelete: SetNull)
+  rating        Int           // 1 to 5
+  partnerRating Int?          // 1 to 5
+  title         String?
+  comment       String?       @db.Text
+  isApproved    Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  images        ReviewImage[]
+
+  @@index([serviceId])
+  @@index([partnerId])
+  @@index([customerId])
+}
+
+model ReviewImage {
+  id        String   @id @default(uuid())
+  reviewId  String
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  url       String
+  createdAt DateTime @default(now())
+
+  @@index([reviewId])
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   NotificationChannel @default(IN_APP)
+  title     String
+  message   String              @db.Text
+  isRead    Boolean             @default(false)
+  metadata  String?             @db.Text
+  createdAt DateTime            @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model NotificationTemplate {
+  id        String              @id @default(uuid())
+  eventKey  String              @unique // "booking_created", "partner_assigned", etc.
+  channel   NotificationChannel
+  subject   String?
+  content   String              @db.Text
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+}
+
+model NotificationPreference {
+  id             String  @id @default(uuid())
+  userId         String  @unique
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  allowEmail     Boolean @default(true)
+  allowSms       Boolean @default(true)
+  allowWhatsApp  Boolean @default(true)
+  allowPush      Boolean @default(true)
+}
+
+// -------------------------------------------------------------
+// 7. CHAT, SUPPORT, MARKETING & SYSTEM
+// -------------------------------------------------------------
+
+model Conversation {
+  id        String    @id @default(uuid())
+  orderId   String
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  messages  Message[]
+
+  @@index([orderId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  senderId       String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation("UserSentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  content        String       @db.Text
+  attachmentUrl  String?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id          String          @id @default(uuid())
+  ticketNo    String          @unique // e.g. "TKT-1001"
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category    String          // BOOKING, PAYMENT, PARTNER, REFUND, OTHER
+  subject     String
+  description String          @db.Text
+  status      TicketStatus    @default(OPEN)
+  priority    String          @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  messages    TicketMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model TicketMessage {
+  id         String        @id @default(uuid())
+  ticketId   String
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId   String
+  senderName String
+  content    String        @db.Text
+  createdAt  DateTime      @default(now())
+
+  @@index([ticketId])
+}
+
+model Banner {
+  id         String    @id @default(uuid())
+  title      String
+  subtitle   String?
+  image      String
+  buttonText String?
+  buttonUrl  String?
+  discount   String?
+  startDate  DateTime  @default(now())
+  endDate    DateTime?
+  sortOrder  Int       @default(0)
+  status     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status])
+}
+
+model CMSPage {
+  id        String   @id @default(uuid())
+  title     String
+  slug      String   @unique // "about", "terms", "privacy", "how-it-works"
+  content   String   @db.Text
+  status    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String   // e.g. "service.price_updated", "partner.kyc_approved"
+  entity    String   // "Service", "Partner"
+  entityId  String
+  oldValue  String?  @db.Text
+  newValue  String?  @db.Text
+  ipAddress String?
+  timestamp DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([userId])
+}
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String   @db.Text
+  category  String   @default("GENERAL") // GENERAL, FINANCIAL, BOOKING, NOTIFICATION
+  updatedAt DateTime @updatedAt
+}

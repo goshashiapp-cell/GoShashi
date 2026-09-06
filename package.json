@@ -1,0 +1,39 @@
+{
+  "name": "goshashi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GoShashi — On-demand Services Marketplace Platform",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "build": "npm run build --workspace=packages/types && npm run build --workspace=packages/config && npm run build --workspace=packages/validation && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:api": "npm run build --workspace=apps/api",
+    "start": "npm run start --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\"",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "node --test packages/config/test/business-rules.test.mjs",
+    "test:e2e": "npm run test:e2e --workspaces --if-present",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.0",
+    "prisma": "^6.4.1",
+    "@prisma/client": "^6.4.1",
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3"
+  }
+}
